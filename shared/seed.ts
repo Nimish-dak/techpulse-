@@ -13,6 +13,18 @@ export interface SeedStory {
  * so fresh stories automatically fall back to generated summaries.
  */
 export const SEED_STORY_SUMMARIES: Record<number, SeedStory> = {
+  50562320: {
+    topic: "Tools",
+    beginner: "Onlook is an open-source design tool that turns visual edits into real React code. It aims at designers who want to work in a live codebase instead of handing off static mockups.",
+    technical: "The YC-backed project edits a running React app and writes changes back to source, pairing a visual canvas with code generation so design tweaks stay in version control.",
+    why: "It is a clear example of bridging design and code — and the repository is public if you want to see how visual editors generate React."
+  },
+  50562113: {
+    topic: "Security",
+    beginner: "The UK government confirmed it issued Apple a secret order that could force the company to weaken encryption. The admission matters for anyone who relies on end-to-end encrypted messaging.",
+    technical: "The disclosure concerns a technical capability notice under the Investigatory Powers Act. Apple has challenged the order, which would undermine end-to-end encryption protections for UK users.",
+    why: "Encryption policy shapes the privacy guarantees you can offer in your own apps, so it is worth following."
+  },
   50561508: {
     topic: "AI",
     beginner: "Pete Warden, creator of Moonshine Voice, explains why more AI is moving onto local devices instead of the cloud. The short version: privacy, latency, and cost all improve when models run on your own hardware.",

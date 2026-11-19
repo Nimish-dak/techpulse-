@@ -10,7 +10,14 @@ A single-page daily digest of the top 10 programming and tech stories from Hacke
 - Topic filters: AI, Web, Security, Tools, Open Source
 - Beginner / Technical toggle for summary depth
 - Refresh button for on-demand updates
-- Dark, minimal, mobile-friendly single page with no login
+- Dark / light theme with a glassmorphism, animated-grid interface
+- Command palette (`Ctrl K`) for searching stories and running actions
+- Keyboard shortcuts: `J`/`K` navigate, `O` open, `B` bookmark, `?` cheat sheet
+- Git-log view that lists stories as commits
+- Dev mode with syntax-highlighted raw JSON and copy buttons
+- Reading list bookmarks that persist in local storage
+- Trending-topics bar chart, read-time estimates, and GitHub-style scores
+- Fully responsive, single page, no login
 
 ## Stack
 
