@@ -43,6 +43,8 @@ OpenAI-compatible Chat Completions endpoint:
 AI_BASE_URL=https://your-provider.example/v1
 AI_API_KEY=sk-...
 AI_MODEL=your-model-id
+# Optional: comma-separated retries if the primary model is overloaded
+AI_FALLBACK_MODELS=backup-model-id
 
 # OpenCode Zen defaults (used when the generic vars are absent)
 OPENCODE_ZEN_API_KEY=oc_sk_...
@@ -52,6 +54,15 @@ OPENCODE_ZEN_MODEL=big-pickle
 Leave `AI_BASE_URL` unset to use OpenCode Zen's `https://opencode.ai/zen/v1`.
 Gemini, Groq, OpenRouter, Together, and many others all expose an OpenAI-compatible
 `/chat/completions` path.
+
+Gemini also works in its native form: set `AI_BASE_URL` to
+`https://generativelanguage.googleapis.com/v1beta` (no `/openai`) and the server uses
+`generateContent` with JSON output mode and a low thinking budget, which is faster.
+The current setup is `AI_MODEL=gemini-3.1-flash-lite` with
+`AI_FALLBACK_MODELS=gemini-3.5-flash-lite`.
+
+The whole AI call is capped at 18 seconds total (15 seconds per model) so the digest
+still returns inside the handler budget when a provider is slow or overloaded.
 
 If the AI provider is unavailable or rate-limited, the app falls back to a cached
 AI-written snapshot of today's stories, then to lightweight generated summaries, so
