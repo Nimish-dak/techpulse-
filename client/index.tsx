@@ -28,6 +28,12 @@ function editionDate(timestamp: number): string {
   });
 }
 
+function editionTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString("en-US", {
+    hour: "numeric", minute: "2-digit"
+  });
+}
+
 function PulseMark() {
   return (
     <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cyan-400/30 bg-cyan-400/10 text-cyan-300">
@@ -79,7 +85,7 @@ export function App() {
           </div>
           <div className="text-right text-xs text-zinc-500">
             <p className="font-medium uppercase tracking-widest text-zinc-400">Daily edition</p>
-            <p className="mt-1">{editionDate(data.generatedAt)}</p>
+            <p className="mt-1">{editionDate(data.generatedAt)} · {editionTime(data.generatedAt)}</p>
           </div>
         </header>
 
@@ -203,7 +209,7 @@ export function App() {
         </div>
 
         <footer className="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-white/5 pt-6 text-xs text-zinc-600">
-          <p>Stories from Hacker News · Summaries by OpenCode Zen</p>
+          <p>Stories from Hacker News · Summaries by AI</p>
           <p>
             {data.source === "ai"
               ? "AI summaries ready"

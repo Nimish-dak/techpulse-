@@ -17,7 +17,6 @@ type Env = Record<string, string | undefined>;
 
 const TOP_STORIES_URL = "https://hacker-news.firebaseio.com/v0/topstories.json";
 const ITEM_URL = "https://hacker-news.firebaseio.com/v0/item";
-const ZEN_URL = "https://opencode.ai/zen/v1/chat/completions";
 const CACHE_MS = 10 * 60 * 1000;
 
 let cache: Digest | null = null;
@@ -136,10 +135,12 @@ function extractJson(content: string): Record<string, unknown> {
 }
 
 async function aiDigest(env: Env, items: HnItem[]): Promise<Digest> {
-  const key = env.OPENCODE_ZEN_API_KEY ?? env.OPENCODE_API_KEY;
-  if (!key) throw new Error("OpenCode Zen API key is not configured");
+  const key = env.AI_API_KEY ?? env.OPENCODE_ZEN_API_KEY ?? env.OPENCODE_API_KEY;
+  if (!key) throw new Error("No AI API key is configured");
 
-  const model = env.OPENCODE_ZEN_MODEL || "big-pickle";
+  const baseUrl = (env.AI_BASE_URL || "https://opencode.ai/zen/v1").replace(/\/+$/, "");
+  const endpoint = baseUrl.endsWith("/chat/completions") ? baseUrl : `${baseUrl}/chat/completions`;
+  const model = env.AI_MODEL || env.OPENCODE_ZEN_MODEL || "big-pickle";
   const fallback = fallbackDigest(items);
   const storyList = items
     .map((item, index) => `${index + 1}. id=${item.id} | ${item.title} | ${domain(item.url ?? "")} | ${item.score ?? 0} points`)
@@ -158,13 +159,17 @@ async function aiDigest(env: Env, items: HnItem[]): Promise<Digest> {
     "- Include every story id from the input, in the same order. Keep each line under 220 characters."
   ].join("\n");
 
-  const response = await fetch(ZEN_URL, {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${key}`
+  };
+  if (baseUrl.includes("opencode.ai")) {
+    headers["x-opencode-session"] = `techpulse-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  const response = await fetch(endpoint, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${key}`,
-      "x-opencode-session": `techpulse-${Date.now()}-${Math.random().toString(36).slice(2)}`
-    },
+    headers,
     body: JSON.stringify({
       model,
       messages: [
@@ -178,12 +183,12 @@ async function aiDigest(env: Env, items: HnItem[]): Promise<Digest> {
 
   if (!response.ok) {
     const detail = await response.text().catch(() => "");
-    throw new Error(`OpenCode Zen returned ${response.status}: ${detail.slice(0, 160)}`);
+    throw new Error(`AI provider returned ${response.status}: ${detail.slice(0, 160)}`);
   }
 
   const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
   const content = payload?.choices?.[0]?.message?.content;
-  if (!content) throw new Error("OpenCode Zen returned no content");
+  if (!content) throw new Error("AI provider returned no content");
 
   const parsed = extractJson(content);
   const rawTakeaways = Array.isArray(parsed.takeaways) ? parsed.takeaways : [];

@@ -28,14 +28,27 @@ Open http://localhost:3000.
 
 ## Configuration
 
-Server-only secrets live in `.env.lakebed.server` (git-ignored):
+Server-only secrets live in `.env.lakebed.server` (git-ignored). The AI call uses any
+OpenAI-compatible Chat Completions endpoint:
 
 ```txt
+# Generic provider (recommended)
+AI_BASE_URL=https://your-provider.example/v1
+AI_API_KEY=sk-...
+AI_MODEL=your-model-id
+
+# OpenCode Zen defaults (used when the generic vars are absent)
 OPENCODE_ZEN_API_KEY=oc_sk_...
 OPENCODE_ZEN_MODEL=big-pickle
 ```
 
-If the AI provider is unavailable or rate-limited, the app automatically shows lightweight generated summaries so the digest still works.
+Leave `AI_BASE_URL` unset to use OpenCode Zen's `https://opencode.ai/zen/v1`.
+Gemini, Groq, OpenRouter, Together, and many others all expose an OpenAI-compatible
+`/chat/completions` path.
+
+If the AI provider is unavailable or rate-limited, the app falls back to a cached
+AI-written snapshot of today's stories, then to lightweight generated summaries, so
+the digest always works.
 
 ## Deploy
 
