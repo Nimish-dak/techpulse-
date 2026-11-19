@@ -846,8 +846,11 @@ export function App() {
       run: () => {
         setTopic("All");
         setView("cards");
+        setActive(index);
         closeOverlays();
-        focusStory(index);
+        window.setTimeout(() => {
+          document.getElementById(`story-${story.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 90);
       }
     });
   });
