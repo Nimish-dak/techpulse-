@@ -104,7 +104,7 @@ async function fetchStories(): Promise<HnItem[]> {
   const ids: number[] = await response.json();
 
   const items = await Promise.all(
-    ids.slice(0, 60).map(async (id) => {
+    ids.slice(0, 40).map(async (id) => {
       try {
         const result = await fetch(`${ITEM_URL}/${id}.json`, { headers: { Accept: "application/json" } });
         if (!result.ok) return null;
@@ -134,13 +134,110 @@ function extractJson(content: string): Record<string, unknown> {
   return JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>;
 }
 
-async function aiDigest(env: Env, items: HnItem[]): Promise<Digest> {
+const AI_TOTAL_TIMEOUT_MS = 18000;
+const AI_ATTEMPT_TIMEOUT_MS = 15000;
+
+function modelChain(env: Env, baseUrl: string): string[] {
+  const primary = env.AI_MODEL || env.OPENCODE_ZEN_MODEL || "big-pickle";
+  const fallbacks = env.AI_FALLBACK_MODELS
+    ?? (baseUrl.includes("generativelanguage.googleapis.com") ? "gemini-3.5-flash-lite" : "");
+  const chain = [primary, ...fallbacks.split(",").map((model) => model.trim()).filter(Boolean)];
+  return chain.filter((model, index) => chain.indexOf(model) === index);
+}
+
+async function requestAiContent(
+  env: Env,
+  model: string,
+  baseUrl: string,
+  endpoint: string,
+  system: string,
+  storyList: string,
+  timeoutMs: number
+): Promise<string> {
   const key = env.AI_API_KEY ?? env.OPENCODE_ZEN_API_KEY ?? env.OPENCODE_API_KEY;
   if (!key) throw new Error("No AI API key is configured");
 
+  if (baseUrl.includes("generativelanguage.googleapis.com") && !baseUrl.endsWith("/openai")) {
+    const generationConfig: Record<string, unknown> = {
+      temperature: 0.3,
+      maxOutputTokens: 2800,
+      responseMimeType: "application/json"
+    };
+    if (/^gemini-3/i.test(model)) {
+      generationConfig.thinkingConfig = { thinkingLevel: "low" };
+    }
+
+    const nativeResponse = await fetch(`${baseUrl}/models/${encodeURIComponent(model)}:generateContent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: system }] },
+        contents: [{ role: "user", parts: [{ text: `Today's stories:\n${storyList}` }] }],
+        generationConfig
+      }),
+      signal: AbortSignal.timeout(timeoutMs)
+    });
+
+    if (!nativeResponse.ok) {
+      const detail = await nativeResponse.text().catch(() => "");
+      throw new Error(`${model}: AI provider returned ${nativeResponse.status}: ${detail.slice(0, 160)}`);
+    }
+
+    const nativePayload = await nativeResponse.json() as {
+      candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      promptFeedback?: { blockReason?: string };
+    };
+    if (nativePayload.promptFeedback?.blockReason) {
+      throw new Error(`${model}: AI blocked the request (${nativePayload.promptFeedback.blockReason})`);
+    }
+    const nativeContent = nativePayload.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("") ?? "";
+    if (!nativeContent) throw new Error(`${model}: AI provider returned no content`);
+    return nativeContent;
+  }
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${key}`
+  };
+  if (baseUrl.includes("opencode.ai")) {
+    headers["x-opencode-session"] = `techpulse-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  const body: Record<string, unknown> = {
+    model,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: `Today's stories:\n${storyList}` }
+    ],
+    temperature: 0.3,
+    max_tokens: 3000
+  };
+  if (baseUrl.includes("generativelanguage.googleapis.com")) {
+    body.response_format = { type: "json_object" };
+  }
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs)
+  });
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(`${model}: AI provider returned ${response.status}: ${detail.slice(0, 160)}`);
+  }
+
+  const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+  const content = payload?.choices?.[0]?.message?.content;
+  if (!content) throw new Error(`${model}: AI provider returned no content`);
+  return content;
+}
+
+async function aiDigest(env: Env, items: HnItem[]): Promise<Digest> {
   const baseUrl = (env.AI_BASE_URL || "https://opencode.ai/zen/v1").replace(/\/+$/, "");
   const endpoint = baseUrl.endsWith("/chat/completions") ? baseUrl : `${baseUrl}/chat/completions`;
-  const model = env.AI_MODEL || env.OPENCODE_ZEN_MODEL || "big-pickle";
+  const models = modelChain(env, baseUrl);
   const fallback = fallbackDigest(items);
   const storyList = items
     .map((item, index) => `${index + 1}. id=${item.id} | ${item.title} | ${domain(item.url ?? "")} | ${item.score ?? 0} points`)
@@ -159,36 +256,24 @@ async function aiDigest(env: Env, items: HnItem[]): Promise<Digest> {
     "- Include every story id from the input, in the same order. Keep each line under 220 characters."
   ].join("\n");
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${key}`
-  };
-  if (baseUrl.includes("opencode.ai")) {
-    headers["x-opencode-session"] = `techpulse-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  let content = "";
+  let lastError: unknown = null;
+  const startedAt = Date.now();
+  for (const model of models) {
+    const remaining = AI_TOTAL_TIMEOUT_MS - (Date.now() - startedAt);
+    if (remaining < 3000) break;
+    try {
+      content = await requestAiContent(env, model, baseUrl, endpoint, system, storyList, Math.min(remaining, AI_ATTEMPT_TIMEOUT_MS));
+      break;
+    } catch (error) {
+      lastError = error;
+    }
   }
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: `Today's stories:\n${storyList}` }
-      ],
-      temperature: 0.3,
-      max_tokens: 3500
-    })
-  });
-
-  if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(`AI provider returned ${response.status}: ${detail.slice(0, 160)}`);
+  if (!content) {
+    if (lastError instanceof Error) throw lastError;
+    throw new Error("AI provider unavailable");
   }
-
-  const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-  const content = payload?.choices?.[0]?.message?.content;
-  if (!content) throw new Error("AI provider returned no content");
 
   const parsed = extractJson(content);
   const rawTakeaways = Array.isArray(parsed.takeaways) ? parsed.takeaways : [];
