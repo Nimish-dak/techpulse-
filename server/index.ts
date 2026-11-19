@@ -1,4 +1,4 @@
-import { capsule, endpoint, mutation, query, text } from "lakebed/server";
+import { capsule, endpoint, mutation, number, query, string, table, text } from "lakebed/server";
 import { TOPICS, type Digest, type DigestStory, type Topic } from "../shared/digest";
 import { SEED_STORY_SUMMARIES, SEED_TAKEAWAYS } from "../shared/seed";
 
@@ -17,7 +17,12 @@ type Env = Record<string, string | undefined>;
 
 const TOP_STORIES_URL = "https://hacker-news.firebaseio.com/v0/topstories.json";
 const ITEM_URL = "https://hacker-news.firebaseio.com/v0/item";
-const CACHE_MS = 10 * 60 * 1000;
+const CACHE_MS = 24 * 60 * 60 * 1000; // 24-hour daily cache
+
+function getDayKey(timestamp: number): string {
+  const d = new Date(timestamp);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
 
 let cache: Digest | null = null;
 let cacheTime = 0;
@@ -310,7 +315,8 @@ async function aiDigest(env: Env, items: HnItem[]): Promise<Digest> {
 
 async function buildDigest(env: Env, force: boolean): Promise<{ digest: Digest; warning?: string }> {
   const now = Date.now();
-  if (!force && cache && now - cacheTime < CACHE_MS) {
+  const todayKey = getDayKey(now);
+  if (!force && cache && now - cacheTime < CACHE_MS && getDayKey(cacheTime) === todayKey) {
     return { digest: cache, warning: lastWarning };
   }
 
@@ -340,9 +346,43 @@ export default capsule({
 
   auth: { requireSignIn: false },
 
+  schema: {
+    digests: table({
+      dayKey: string(),
+      dataJson: string(),
+      generatedAt: number()
+    }).index("by_day", ["dayKey"])
+  },
+
   queries: {
     digest: query(
       async (ctx) => {
+        const now = Date.now();
+        const todayKey = getDayKey(now);
+
+        // 1. In-memory check (0 ms response, zero external network requests)
+        if (cache && now - cacheTime < CACHE_MS && getDayKey(cacheTime) === todayKey) {
+          return cache;
+        }
+
+        // 2. Database check (5 ms response, survives worker cold-starts without calling HN or AI)
+        try {
+          const dbRow = await ctx.db.digests
+            .withIndex("by_day", (q) => q.eq("dayKey", todayKey))
+            .order("desc")
+            .first();
+
+          if (dbRow && typeof dbRow.dataJson === "string") {
+            const parsed = JSON.parse(dbRow.dataJson) as Digest;
+            cache = parsed;
+            cacheTime = dbRow.generatedAt || now;
+            return cache;
+          }
+        } catch (err) {
+          ctx.log.warn("Database cache lookup failed", { error: err instanceof Error ? err.message : String(err) });
+        }
+
+        // 3. Fallback: generate today's initial digest if not created yet
         const result = await buildDigest(ctx.env, false);
         if (result.warning) ctx.log.warn("AI summaries unavailable", { reason: result.warning });
         return result.digest;
@@ -353,8 +393,22 @@ export default capsule({
 
   mutations: {
     refreshDigest: mutation(async (ctx) => {
+      // Explicit user action: re-fetch from Hacker News and re-run AI summarization
       const result = await buildDigest(ctx.env, true);
       if (result.warning) ctx.log.warn("AI summaries unavailable on refresh", { reason: result.warning });
+
+      // Persist to database so subsequent visitors get the refreshed digest instantly
+      try {
+        const todayKey = getDayKey(result.digest.generatedAt);
+        await ctx.db.digests.insert({
+          dayKey: todayKey,
+          dataJson: JSON.stringify(result.digest),
+          generatedAt: result.digest.generatedAt
+        });
+      } catch (err) {
+        ctx.log.warn("Failed to persist digest to database", { error: err instanceof Error ? err.message : String(err) });
+      }
+
       return result.digest;
     })
   },
