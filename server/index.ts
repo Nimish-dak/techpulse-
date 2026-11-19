@@ -1,49 +1,275 @@
-import { boolean, capsule, endpoint, mutation, query, string, table, text, userId } from "lakebed/server";
-import { cleanTodoText } from "../shared/todo";
+import { capsule, endpoint, mutation, query, text } from "lakebed/server";
+import { TOPICS, type Digest, type DigestStory, type Topic } from "../shared/digest";
+import { SEED_STORY_SUMMARIES, SEED_TAKEAWAYS } from "../shared/seed";
+
+interface HnItem {
+  id: number;
+  title?: string;
+  url?: string;
+  score?: number;
+  descendants?: number;
+  by?: string;
+  type?: string;
+  time?: number;
+}
+
+type Env = Record<string, string | undefined>;
+
+const TOP_STORIES_URL = "https://hacker-news.firebaseio.com/v0/topstories.json";
+const ITEM_URL = "https://hacker-news.firebaseio.com/v0/item";
+const ZEN_URL = "https://opencode.ai/zen/v1/chat/completions";
+const CACHE_MS = 10 * 60 * 1000;
+
+let cache: Digest | null = null;
+let cacheTime = 0;
+let inflight: Promise<Digest> | null = null;
+let lastWarning: string | undefined;
+
+function domain(url: string): string {
+  return url.replace(/^https?:\/\//, "").split("/")[0].replace(/^www\./, "");
+}
+
+function topicFor(title: string): Topic {
+  const value = title.toLowerCase();
+  if (/\b(ai|llm|gpt|claude|gemini|model|neural|machine learning|agent|transformer|openai|anthropic)\b/.test(value)) return "AI";
+  if (/\b(security|secure|vulnerability|cve|breach|exploit|password|encrypt|phishing|malware|auth)\b/.test(value)) return "Security";
+  if (/\b(web|browser|css|html|react|vue|javascript|typescript|http|frontend|backend|next\.js|node)\b/.test(value)) return "Web";
+  if (/\b(open source|opensource|github|gitlab|license|foss|community|foundation)\b/.test(value)) return "Open Source";
+  return "Tools";
+}
+
+function cleanLine(value: unknown, max: number): string {
+  if (typeof value !== "string") return "";
+  return value.replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+function fallbackDigest(items: HnItem[]): Digest {
+  const stories: DigestStory[] = items.map((item) => {
+    const title = item.title ?? "Untitled story";
+    const topic = topicFor(title);
+    return {
+      id: item.id,
+      title,
+      url: item.url ?? `https://news.ycombinator.com/item?id=${item.id}`,
+      hnUrl: `https://news.ycombinator.com/item?id=${item.id}`,
+      score: item.score ?? 0,
+      comments: item.descendants ?? 0,
+      by: item.by ?? "",
+      topic,
+      beginner: `“${title}” is drawing attention on Hacker News today. It is a useful one-minute read to see what developers are talking about right now.`,
+      technical: `Community discussion around “${title}” (${item.score ?? 0} points). Open the source for the implementation details, benchmarks, and trade-offs people are debating.`,
+      why: `Knowing what is trending helps you decide which tools and topics are worth exploring next.`
+    };
+  });
+
+  const takeaways = stories.slice(0, 3).map((story, index) =>
+    `${index + 1}. ${story.title} — a top discussion in ${story.topic.toLowerCase()} today.`
+  );
+  for (let index = takeaways.length; index < 3; index += 1) {
+    takeaways.push("Check back tomorrow for another two-minute digest of developer news.");
+  }
+
+  return { stories, takeaways, generatedAt: Date.now(), source: "fallback" };
+}
+
+function seedDigest(items: HnItem[]): Digest {
+  const fallback = fallbackDigest(items);
+  const stories = fallback.stories.map((base) => {
+    const seed = SEED_STORY_SUMMARIES[base.id];
+    return seed ? { ...base, ...seed } : base;
+  });
+  const matched = stories.filter((story) => Boolean(SEED_STORY_SUMMARIES[story.id])).length;
+  return {
+    stories,
+    takeaways: matched >= 5 ? SEED_TAKEAWAYS : fallback.takeaways,
+    generatedAt: Date.now(),
+    source: matched > 0 ? "seed" : "fallback"
+  };
+}
+
+const STRONG_PATTERN = /program|developer|software|code|coding|linux|python|javascript|typescript|rust|golang|java\b|compiler|database|\bsql\b|sqlite|postgres|\bapi\b|server|browser|security|vulnerab|exploit|encrypt|\bai\b|llm|openai|anthropic|github|open.?source|kernel|docker|kubernetes|\bgit\b|react|node|devops|terminal|\bcli\b|reverse.?engineer|malware|ransom|phishing|password|privacy|\bhttp\b|\bdns\b|\btcp\b|unix|bsd|\bnix\b|webgpu|rails|ruby/i;
+const WEAK_PATTERN = /\bweb\b|model|library|robot|quantum|android|\bios\b|windows|macos|firefox|chrome|safari|self.?host|surveillance|framework|algorithm|machine.?learning|neural|chip|cpu|gpu|cloud/i;
+const TECH_DOMAIN = /github\.com|gitlab|arxiv|kernel\.org|mozilla|w3\.org|python|rust-lang|go\.dev|nodejs|npmjs|postgresql|ruby-lang/i;
+
+function relevanceScore(item: HnItem): number {
+  const title = item.title ?? "";
+  const url = item.url ?? "";
+  if (STRONG_PATTERN.test(title) || TECH_DOMAIN.test(url)) return 2;
+  if (WEAK_PATTERN.test(title)) return 1;
+  return 0;
+}
+
+async function fetchStories(): Promise<HnItem[]> {
+  const response = await fetch(TOP_STORIES_URL, { headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error(`Hacker News returned ${response.status}`);
+  const ids: number[] = await response.json();
+
+  const items = await Promise.all(
+    ids.slice(0, 60).map(async (id) => {
+      try {
+        const result = await fetch(`${ITEM_URL}/${id}.json`, { headers: { Accept: "application/json" } });
+        if (!result.ok) return null;
+        return (await result.json()) as HnItem;
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  const usable = items.filter(
+    (item): item is HnItem => Boolean(item && item.type === "story" && item.title && item.url)
+  );
+  const strongHot = usable.filter((item) => relevanceScore(item) === 2 && (item.score ?? 0) >= 10);
+  const strongOther = usable.filter((item) => relevanceScore(item) === 2 && (item.score ?? 0) < 10);
+  const weak = usable.filter((item) => relevanceScore(item) === 1);
+  const rest = usable.filter((item) => relevanceScore(item) === 0);
+
+  return [...strongHot, ...strongOther, ...weak, ...rest].slice(0, 10);
+}
+
+function extractJson(content: string): Record<string, unknown> {
+  const cleaned = content.trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start < 0 || end <= start) throw new Error("AI did not return JSON");
+  return JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>;
+}
+
+async function aiDigest(env: Env, items: HnItem[]): Promise<Digest> {
+  const key = env.OPENCODE_ZEN_API_KEY ?? env.OPENCODE_API_KEY;
+  if (!key) throw new Error("OpenCode Zen API key is not configured");
+
+  const model = env.OPENCODE_ZEN_MODEL || "big-pickle";
+  const fallback = fallbackDigest(items);
+  const storyList = items
+    .map((item, index) => `${index + 1}. id=${item.id} | ${item.title} | ${domain(item.url ?? "")} | ${item.score ?? 0} points`)
+    .join("\n");
+
+  const system = [
+    "You write a daily programming news digest for students and developers.",
+    "Return ONLY a JSON object with exactly this shape, no markdown:",
+    '{"takeaways":["line 1","line 2","line 3"],"stories":[{"id":123,"topic":"AI","beginner":"...","technical":"...","why":"..."}]}',
+    "Rules:",
+    "- takeaways: exactly 3 short lines naming the biggest trends across today's stories.",
+    "- topic must be exactly one of: AI, Web, Security, Tools, Open Source.",
+    "- beginner: 1-2 plain sentences explaining the story without jargon.",
+    "- technical: 1-2 sentences with the concrete details a developer would want.",
+    "- why: one sentence on why a student developer should care.",
+    "- Include every story id from the input, in the same order. Keep each line under 220 characters."
+  ].join("\n");
+
+  const response = await fetch(ZEN_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${key}`,
+      "x-opencode-session": `techpulse-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: `Today's stories:\n${storyList}` }
+      ],
+      temperature: 0.3,
+      max_tokens: 3500
+    })
+  });
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(`OpenCode Zen returned ${response.status}: ${detail.slice(0, 160)}`);
+  }
+
+  const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+  const content = payload?.choices?.[0]?.message?.content;
+  if (!content) throw new Error("OpenCode Zen returned no content");
+
+  const parsed = extractJson(content);
+  const rawTakeaways = Array.isArray(parsed.takeaways) ? parsed.takeaways : [];
+  const takeaways = rawTakeaways.map((line) => cleanLine(line, 220)).filter(Boolean).slice(0, 3);
+
+  const byId = new Map<number, Record<string, unknown>>();
+  const rawStories = Array.isArray(parsed.stories) ? parsed.stories : [];
+  for (const entry of rawStories) {
+    if (entry && typeof entry === "object" && typeof (entry as Record<string, unknown>).id === "number") {
+      byId.set((entry as Record<string, unknown>).id as number, entry as Record<string, unknown>);
+    }
+  }
+
+  const stories = fallback.stories.map((base) => {
+    const entry = byId.get(base.id);
+    if (!entry) return base;
+    const maybeTopic = cleanLine(entry.topic, 20);
+    return {
+      ...base,
+      topic: (TOPICS as readonly string[]).includes(maybeTopic) ? (maybeTopic as Topic) : base.topic,
+      beginner: cleanLine(entry.beginner, 300) || base.beginner,
+      technical: cleanLine(entry.technical, 300) || base.technical,
+      why: cleanLine(entry.why, 240) || base.why
+    };
+  });
+
+  return {
+    stories,
+    takeaways: takeaways.length === 3 ? takeaways : fallback.takeaways,
+    generatedAt: Date.now(),
+    source: "ai"
+  };
+}
+
+async function buildDigest(env: Env, force: boolean): Promise<{ digest: Digest; warning?: string }> {
+  const now = Date.now();
+  if (!force && cache && now - cacheTime < CACHE_MS) {
+    return { digest: cache, warning: lastWarning };
+  }
+
+  if (!inflight) {
+    inflight = (async () => {
+      const items = await fetchStories();
+      try {
+        cache = await aiDigest(env, items);
+        lastWarning = undefined;
+      } catch (error) {
+        lastWarning = error instanceof Error ? error.message : "AI summaries unavailable";
+        cache = seedDigest(items);
+      }
+      cacheTime = Date.now();
+      return cache;
+    })().finally(() => {
+      inflight = null;
+    });
+  }
+
+  const digest = await inflight;
+  return { digest, warning: lastWarning };
+}
 
 export default capsule({
-  name: "Techpulse",
+  name: "TechPulse",
 
   auth: { requireSignIn: false },
 
-  schema: {
-    todos: table({
-      text: string(),
-      done: boolean().default(false),
-      ownerId: userId()
-    }).index("by_owner", ["ownerId"])
-  },
-
-  // The `tool` option lets browser agents call a handler through WebMCP.
   queries: {
-    todos: query(
+    digest: query(
       async (ctx) => {
-        const { userId } = ctx.auth.requireIdentity();
-        return ctx.db.todos
-          .withIndex("by_owner", (q) => q.eq("ownerId", userId))
-          .order("desc")
-          .collect();
+        const result = await buildDigest(ctx.env, false);
+        if (result.warning) ctx.log.warn("AI summaries unavailable", { reason: result.warning });
+        return result.digest;
       },
-      { tool: { description: "List the current user's todos, newest first." } }
+      { tool: { description: "Get today's top 10 programming stories with AI summaries and takeaways." } }
     )
   },
 
   mutations: {
-    addTodo: mutation(
-      async (ctx, args) => {
-        const { userId } = ctx.auth.requireIdentity();
-        const cleanText = cleanTodoText(args.text);
-        if (!cleanText) {
-          return;
-        }
-
-        await ctx.db.todos.insert({ text: cleanText, ownerId: userId });
-      },
-      { tool: { description: "Add a todo for the current user.", args: { text: string() } } }
-    )
+    refreshDigest: mutation(async (ctx) => {
+      const result = await buildDigest(ctx.env, true);
+      if (result.warning) ctx.log.warn("AI summaries unavailable on refresh", { reason: result.warning });
+      return result.digest;
+    })
   },
 
   endpoints: {
-    status: endpoint({ method: "GET", path: "/api/status" }, () => text("ok"))
+    status: endpoint({ method: "GET", path: "/api/status", readOnly: true }, () => text("ok"))
   }
 });

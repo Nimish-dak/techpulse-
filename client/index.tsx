@@ -1,171 +1,218 @@
-import { canAccessApp, createClient, getIdentity, Link, retryAuth, Route, Router, Routes, SignInWithGoogle, signOut, useAuth } from "lakebed/client";
-import type { ComponentChildren } from "preact";
+import { createClient } from "lakebed/client";
 import { useState } from "preact/hooks";
 import type app from "../server";
-import { cleanTodoText } from "../shared/todo";
+import { TOPICS, type Digest, type ExplanationMode, type Topic } from "../shared/digest";
 
 const client = createClient<typeof app>();
+const FILTERS: Array<"All" | Topic> = ["All", ...TOPICS];
 
-function AuthAvatar({ label, picture }: { label: string; picture?: string }) {
-  const initial = label.trim().slice(0, 1).toUpperCase() || "?";
+const TAG_STYLES: Record<Topic, string> = {
+  "AI": "rounded-full border border-violet-400/30 bg-violet-400/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-violet-300",
+  "Web": "rounded-full border border-sky-400/30 bg-sky-400/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-sky-300",
+  "Security": "rounded-full border border-rose-400/30 bg-rose-400/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-rose-300",
+  "Tools": "rounded-full border border-amber-400/30 bg-amber-400/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-300",
+  "Open Source": "rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-emerald-300"
+};
 
-  if (picture) {
-    return (
-      <img
-        alt=""
-        className="h-7 w-7 shrink-0 rounded-full border border-neutral-800 bg-neutral-900 object-cover"
-        referrerPolicy="no-referrer"
-        src={picture}
-      />
-    );
+function sourceOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "source";
   }
+}
 
+function editionDate(timestamp: number): string {
+  return new Date(timestamp).toLocaleDateString("en-US", {
+    weekday: "long", month: "long", day: "numeric", year: "numeric"
+  });
+}
+
+function PulseMark() {
   return (
-    <span
-      aria-hidden="true"
-      className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-neutral-800 bg-neutral-900 text-xs font-medium text-neutral-300"
-    >
-      {initial}
+    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-cyan-400/30 bg-cyan-400/10 text-cyan-300">
+      <svg aria-hidden="true" className="h-5 w-5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24">
+        <path d="M2 12h4l3-8 6 16 3-8h4" />
+      </svg>
     </span>
   );
 }
 
-function TodoPage() {
-  const todos = client.useQuery("todos");
-  const addTodo = client.useMutation("addTodo");
-
-  async function onSubmit(event: SubmitEvent) {
-    event.preventDefault();
-    const form = event.currentTarget as HTMLFormElement;
-    const data = new FormData(form);
-    const text = cleanTodoText(String(data.get("text") ?? ""));
-    if (!text) {
-      return;
-    }
-
-    await addTodo({ text });
-    form.reset();
-  }
-
-  return (
-    <section>
-      <h1 className="mb-8 text-5xl font-bold tracking-tight">{ "Techpulse" }</h1>
-      <form className="mb-8 flex gap-3" onSubmit={(event) => void onSubmit(event)}>
-        <input className="min-w-0 flex-1 border border-neutral-700 bg-black px-3 py-2 text-white outline-none focus:border-white" name="text" placeholder="Add a todo" />
-        <button className="border border-white px-4 py-2 font-medium" type="submit">Add</button>
-      </form>
-      <ul className="divide-y divide-neutral-800 border-y border-neutral-800">
-        {(todos ?? []).map((todo) => (
-          <li className="py-3" key={todo.id}>{todo.text}</li>
-        ))}
-      </ul>
-    </section>
-  );
-}
-
-function StatusPage() {
-  const [status, setStatus] = useState("not checked");
-
-  async function checkStatus() {
-    const token = getIdentity().token;
-    const response = await fetch("api/status", {
-      headers: token ? { "X-Lakebed-Token": token } : {}
-    });
-    setStatus(response.ok ? await response.text() : "error " + response.status);
-  }
-
-  return (
-    <section>
-      <h1 className="mb-4 text-4xl font-bold tracking-tight">Status</h1>
-      <p className="mb-6 text-neutral-400">This route calls the server endpoint at /api/status.</p>
-      <button className="border border-white px-4 py-2 font-medium" type="button" onClick={() => void checkStatus()}>
-        Check endpoint
-      </button>
-      <p className="mt-4 font-mono text-sm text-neutral-400">endpoint: {status}</p>
-    </section>
-  );
-}
-
-function SessionGate({ children }: { children: ComponentChildren }) {
-  const auth = useAuth();
-  if (auth.isLoading) {
-    return null;
-  }
-  if (canAccessApp()) {
-    return <>{children}</>;
-  }
-  return (
-    <section>
-      {auth.error ? <p role="alert">{auth.error}</p> : <p>Sign in to use this app.</p>}
-      <div className="mt-4 flex flex-wrap gap-3">
-        {auth.error ? (
-          <button className="border border-white px-4 py-2" type="button" onClick={() => void retryAuth()}>
-            Retry
-          </button>
-        ) : null}
-        <SignInWithGoogle className="border border-white px-4 py-2" />
-        {!auth.requireSignIn && auth.userId === null ? (
-          <button
-            className="border border-white px-4 py-2"
-            type="button"
-            onClick={() => {
-              if (window.confirm("Start a new guest session? Guest data that has not moved to an account stays inaccessible.")) {
-                void signOut();
-              }
-            }}
-          >
-            Start a new guest session
-          </button>
-        ) : null}
-      </div>
-    </section>
-  );
-}
-
 export function App() {
-  const auth = useAuth();
-  const authLabel = auth.displayName;
-  const authStatus = auth.isLoading
-    ? ""
-    : auth.isSignedIn
-      ? "Signed in as " + authLabel
-      : auth.isGuest
-        ? "Using this browser"
-        : "Signed out";
+  const digest = client.useQuery("digest");
+  const refreshDigest = client.useMutation("refreshDigest");
+  const [mode, setMode] = useState<ExplanationMode>("beginner");
+  const [topic, setTopic] = useState<"All" | Topic>("All");
+  const [fresh, setFresh] = useState<Digest | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function onRefresh() {
+    setBusy(true);
+    setError("");
+    try {
+      setFresh(await refreshDigest());
+    } catch {
+      setError("Refresh failed. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const data = fresh ?? digest;
+  if (!data) return null;
+
+  const stories = data.stories.filter((story) => topic === "All" || story.topic === topic);
 
   return (
-    <Router>
-      <main className="min-h-screen bg-black px-6 py-10 text-white">
-        <section className="mx-auto max-w-2xl">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-2">
-              {auth.isSignedIn ? <AuthAvatar label={authLabel} picture={auth.picture} /> : null}
-              <p className="min-w-0 truncate font-mono text-sm">{authStatus}</p>
+    <main className="min-h-screen bg-[#08090b] text-zinc-100 antialiased">
+      <div className="pointer-events-none fixed inset-x-0 top-0 h-96 bg-gradient-to-b from-cyan-500/10 via-indigo-500/5 to-transparent" />
+
+      <div className="relative mx-auto w-full max-w-5xl px-4 pb-16 pt-8 sm:px-6 sm:pt-12">
+        <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
+          <div className="flex items-start gap-3">
+            <PulseMark />
+            <div>
+              <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Tech<span className="text-cyan-400">Pulse</span></h1>
+              <p className="mt-1 max-w-md text-sm text-zinc-400">Your 2-minute daily programming news, summarized by AI.</p>
             </div>
-            {auth.isSignedIn ? (
-              <button className="shrink-0 text-sm text-neutral-400 hover:text-white" type="button" onClick={() => void signOut()}>
-                Sign out
-              </button>
-            ) : auth.isGuest ? (
-              <SignInWithGoogle className="shrink-0 border border-neutral-700 px-3 py-1.5 text-sm font-medium text-neutral-200 hover:border-white hover:text-white" />
-            ) : null}
           </div>
-          {auth.isGuest ? (
-            <p className="mb-6 text-sm">Sign in to keep your todos. Clearing browser data ends guest access.</p>
-          ) : null}
-          <nav className="mb-8 flex gap-4 text-sm text-neutral-400">
-            <Link className="hover:text-white" to="/">Todos</Link>
-            <Link className="hover:text-white" to="/status">Status</Link>
-          </nav>
-          <SessionGate>
-            <Routes>
-              <Route path="/" element={<TodoPage />} />
-              <Route path="/status" element={<StatusPage />} />
-              <Route path="*" element={<section><h1 className="mb-4 text-4xl font-bold">Not found</h1><Link className="text-neutral-300 hover:text-white" to="/">Back to todos</Link></section>} />
-            </Routes>
-          </SessionGate>
-        </section>
-      </main>
-    </Router>
+          <div className="text-right text-xs text-zinc-500">
+            <p className="font-medium uppercase tracking-widest text-zinc-400">Daily edition</p>
+            <p className="mt-1">{editionDate(data.generatedAt)}</p>
+          </div>
+        </header>
+
+        <div className="transition-opacity duration-200 starting:opacity-0">
+          <section className="mb-6 rounded-2xl border border-white/10 bg-white/[0.03] p-5 sm:p-6">
+            <div className="mb-4 flex items-center gap-2">
+              <svg aria-hidden="true" className="h-4 w-4 text-cyan-400" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24">
+                <path d="M12 3l1.9 5.6L20 10.5l-6.1 1.9L12 18l-1.9-5.6L4 10.5l6.1-1.9L12 3z" />
+              </svg>
+              <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">Top Takeaways</h2>
+            </div>
+            <ol className="space-y-2.5">
+              {data.takeaways.map((line, index) => (
+                <li className="flex gap-3 text-sm leading-relaxed text-zinc-300 sm:text-[15px]" key={index}>
+                  <span className="mt-0.5 font-mono text-xs text-cyan-500">{String(index + 1).padStart(2, "0")}</span>
+                  <span>{line}</span>
+                </li>
+              ))}
+            </ol>
+          </section>
+
+          <section className="mb-5 flex flex-col gap-4 rounded-2xl border border-white/10 bg-white/[0.02] p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap gap-2">
+              {FILTERS.map((item) => (
+                <button
+                  aria-pressed={topic === item}
+                  className={topic === item
+                    ? "rounded-full border border-cyan-400/40 bg-cyan-400 px-3 py-1.5 text-xs font-semibold text-slate-950 transition-colors"
+                    : "rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-zinc-400 transition-colors hover:border-white/20 hover:text-white"}
+                  key={item}
+                  onClick={() => setTopic(item)}
+                  type="button"
+                >
+                  {item}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex rounded-full border border-white/10 bg-black/40 p-1">
+                <button
+                  aria-pressed={mode === "beginner"}
+                  className={mode === "beginner"
+                    ? "rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold text-white"
+                    : "rounded-full px-3 py-1.5 text-xs font-medium text-zinc-500 transition-colors hover:text-white"}
+                  onClick={() => setMode("beginner")}
+                  type="button"
+                >
+                  Beginner
+                </button>
+                <button
+                  aria-pressed={mode === "technical"}
+                  className={mode === "technical"
+                    ? "rounded-full bg-white/10 px-3 py-1.5 text-xs font-semibold text-white"
+                    : "rounded-full px-3 py-1.5 text-xs font-medium text-zinc-500 transition-colors hover:text-white"}
+                  onClick={() => setMode("technical")}
+                  type="button"
+                >
+                  Technical
+                </button>
+              </div>
+              <button
+                className="flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3.5 py-2 text-xs font-semibold text-zinc-200 transition-colors hover:border-cyan-400/40 hover:text-white disabled:opacity-50"
+                disabled={busy}
+                onClick={() => void onRefresh()}
+                type="button"
+              >
+                <svg aria-hidden="true" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24">
+                  <path d="M21 12a9 9 0 11-3-6.7L21 8" />
+                  <path d="M21 3v5h-5" />
+                </svg>
+                {busy ? "Refreshing" : "Refresh"}
+              </button>
+            </div>
+          </section>
+
+          {error ? <p className="mb-4 text-sm text-amber-400" role="alert">{error}</p> : null}
+
+          {stories.length === 0 ? (
+            <p className="rounded-2xl border border-white/10 bg-white/[0.02] p-8 text-center text-sm text-zinc-400">
+              No {topic} stories in today&apos;s top 10. Try another topic.
+            </p>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2">
+              {stories.map((story, index) => (
+                <article className="group flex flex-col rounded-2xl border border-white/10 bg-white/[0.03] p-5 transition-colors hover:border-cyan-400/30 hover:bg-white/[0.05]" key={story.id}>
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <span className={TAG_STYLES[story.topic]}>{story.topic}</span>
+                    <span className="font-mono text-xs text-zinc-500">
+                      {String(index + 1).padStart(2, "0")} / {String(data.stories.length).padStart(2, "0")}
+                    </span>
+                  </div>
+
+                  <h3 className="mb-3 text-base font-semibold leading-snug text-zinc-100">
+                    <a className="transition-colors group-hover:text-cyan-300" href={story.url} rel="noreferrer" target="_blank">
+                      {story.title}
+                    </a>
+                  </h3>
+
+                  <p className="mb-3 text-sm leading-relaxed text-zinc-400">
+                    {mode === "beginner" ? story.beginner : story.technical}
+                  </p>
+
+                  <p className="mb-4 text-sm leading-relaxed text-zinc-300">
+                    <span className="font-semibold text-cyan-400">Why it matters:</span> {story.why}
+                  </p>
+
+                  <div className="mt-auto flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-white/5 pt-3 text-xs text-zinc-500">
+                    <span>{sourceOf(story.url)}</span>
+                    <span>{story.score} points</span>
+                    <a className="hover:text-cyan-300" href={story.hnUrl} rel="noreferrer" target="_blank">
+                      {story.comments} comments
+                    </a>
+                    <a className="ml-auto font-medium text-cyan-400 hover:text-cyan-300" href={story.url} rel="noreferrer" target="_blank">
+                      Read story →
+                    </a>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <footer className="mt-10 flex flex-wrap items-center justify-between gap-3 border-t border-white/5 pt-6 text-xs text-zinc-600">
+          <p>Stories from Hacker News · Summaries by OpenCode Zen</p>
+          <p>
+            {data.source === "ai"
+              ? "AI summaries ready"
+              : data.source === "seed"
+                ? "AI summaries from today's snapshot"
+                : "Quick summaries while the AI provider is unavailable"}
+          </p>
+        </footer>
+      </div>
+    </main>
   );
 }
