@@ -234,7 +234,7 @@ body { margin: 0; }
 .nr-palette-item:hover, .nr-palette-item[data-active="true"] { background: rgba(0,240,255,0.05); border-color: var(--nr-border); color: var(--nr-text); }
 
 /* ── Code block ── */
-.nr-code { font-family: inherit; font-size: 11px; line-height: 1.65; white-space: pre; overflow-x: auto; }
+.nr-code { font-family: inherit; font-size: 11px; line-height: 1.65; white-space: pre-wrap; word-break: break-all; overflow-x: auto; }
 .nr-code .k { color: var(--nr-cyan); }
 .nr-code .s { color: var(--nr-green); }
 .nr-code .n { color: var(--nr-amber); }
@@ -522,7 +522,7 @@ function StoryCard(props: {
             aria-pressed={bookmarked}
             className="nr-btn h-7 w-7 justify-center p-0"
             onClick={(e) => { e.stopPropagation(); onBookmark(story); }}
-            style={bookmarked ? { color: "var(--nr-cyan)", borderColor: "rgba(0,240,255,0.4)" } : undefined}
+            style={bookmarked ? { color: "var(--nr-cyan)", borderColor: "rgba(0,255,194,0.4)" } : { color: "var(--nr-body)", borderColor: "var(--nr-border)" }}
             type="button"
           >
             <svg aria-hidden="true" className="h-3.5 w-3.5" fill={bookmarked ? "currentColor" : "none"} stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24">
@@ -585,13 +585,13 @@ function GitLog(props: {
             <div className={`nr-log-row ${active === index ? "nr-active" : ""}`} id={`log-${story.id}`} key={story.id} onClick={() => onFocus(index)} onDblClick={() => window.open(story.url, "_blank", "noopener")}>
               <div className="flex items-center gap-2">
                 <span className="text-[10px]" style={{ color: "var(--nr-cyan)" }}>{commitHash(story.id)}</span>
-                <span className="px-1 text-[8px] uppercase" style={{ background: "rgba(0,240,255,0.06)", color: "var(--nr-faint)", border: "1px solid var(--nr-border)" }}>{story.topic}</span>
+                <span className={TOPIC_CLASS[story.topic]} style={{ fontSize: "8px" }}>{story.topic}</span>
               </div>
               <div className="min-w-0">
                 <div className="flex items-start gap-2">
                   <a className="truncate text-[12px] font-medium" href={story.url} rel="noreferrer" target="_blank" style={{ color: "var(--nr-text)" }}>{story.title}</a>
                   <span className="shrink-0 text-[10px]" style={{ color: "var(--nr-faint)" }}>(score: {story.score})</span>
-                  <button aria-label={saved ? "Remove bookmark" : "Bookmark"} className="ml-auto shrink-0 p-0.5" onClick={(e) => { e.stopPropagation(); onBookmark(story); }} style={{ color: saved ? "var(--nr-cyan)" : "var(--nr-faint)" }} type="button">
+                  <button aria-label={saved ? "Remove bookmark" : "Bookmark"} className="ml-auto shrink-0 p-0.5" onClick={(e) => { e.stopPropagation(); onBookmark(story); }} style={{ color: saved ? "var(--nr-cyan)" : "var(--nr-muted)" }} type="button">
                     <svg aria-hidden="true" className="h-3.5 w-3.5" fill={saved ? "currentColor" : "none"} stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24"><path d="M6 4h12v17l-6-4-6 4V4z" /></svg>
                   </button>
                 </div>
