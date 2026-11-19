@@ -58,8 +58,8 @@ const STYLES = `
   --nr-border-strong: rgba(0,255,194,0.30);
   --nr-text: #e8edf5;
   --nr-body: #8A99AD;
-  --nr-muted: #566178;
-  --nr-faint: #003232;
+  --nr-muted: #6b778d;
+  --nr-faint: #55627a;
   --nr-cyan: #00FFC2;
   --nr-green: #39FF14;
   --nr-magenta: #FF00E5;
@@ -551,14 +551,26 @@ function StoryCard(props: {
       {devMode ? <JsonBlock label={`${commitHash(story.id)}.json`} value={jsonFor(story)} /> : null}
 
       {/* Footer */}
-      <div className="mt-auto flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-dashed pt-3 text-[10px]" style={{ borderColor: "var(--nr-border)", color: "var(--nr-faint)" }}>
-        <span className="truncate">{sourceOf(story.url)}</span>
+      <div className="mt-auto flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-dashed pt-3 text-[10px]" style={{ borderColor: "var(--nr-border)", color: "var(--nr-body)" }}>
+        <span className="truncate" style={{ color: "var(--nr-muted)" }}>{sourceOf(story.url)}</span>
         <span className="nr-stars flex items-center gap-1 font-semibold" title={`${story.score} points`}>
           <svg aria-hidden="true" className="h-3 w-3" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2l3 6.5 7 1-5 4.9 1.2 7L12 18l-6.2 3.4L7 14.4l-5-4.9 7-1L12 2z" /></svg>
           {formatScore(story.score)}
         </span>
-        <a className="hover:opacity-80" href={story.hnUrl} rel="noreferrer" target="_blank">{story.comments} comments</a>
-        <a className="ml-auto font-bold" href={story.url} rel="noreferrer" style={{ color: "var(--nr-cyan)" }} target="_blank">READ →</a>
+        <a
+          className="flex items-center gap-1 font-bold transition-all hover:underline"
+          href={story.hnUrl}
+          rel="noreferrer"
+          style={{ color: "var(--nr-amber)", textShadow: "0 0 8px rgba(255,184,0,0.3)" }}
+          target="_blank"
+          title="Open Hacker News discussion thread"
+        >
+          <svg aria-hidden="true" className="h-3 w-3" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24">
+            <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+          </svg>
+          {story.comments} comments ↗
+        </a>
+        <a className="ml-auto font-bold nr-link" href={story.url} rel="noreferrer" style={{ color: "var(--nr-cyan)" }} target="_blank">READ →</a>
       </div>
     </article>
   );
@@ -595,8 +607,8 @@ function GitLog(props: {
                     <svg aria-hidden="true" className="h-3.5 w-3.5" fill={saved ? "currentColor" : "none"} stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" viewBox="0 0 24 24"><path d="M6 4h12v17l-6-4-6 4V4z" /></svg>
                   </button>
                 </div>
-                <p className="mt-1 truncate text-[9px]" style={{ color: "var(--nr-faint)" }}>
-                  {story.by || "unknown"} · {story.comments} comments · {readMinutes(story)} min read · {sourceOf(story.url)}
+                <p className="mt-1 truncate text-[10px]" style={{ color: "var(--nr-muted)" }}>
+                  {story.by || "unknown"} · <a className="font-semibold hover:underline" href={story.hnUrl} rel="noreferrer" style={{ color: "var(--nr-amber)" }} target="_blank">{story.comments} comments ↗</a> · {readMinutes(story)} min read · {sourceOf(story.url)}
                 </p>
               </div>
             </div>
